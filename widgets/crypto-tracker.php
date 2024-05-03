@@ -1,5 +1,8 @@
 <?php
 
+require(WP_PLUGIN_DIR . '/CryptoTracker/includes/Api.php');
+
+
 /**
  * Elementor Crypto Tracker Widget.
  *
@@ -70,51 +73,15 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 		return ['Crypto Tracker'];
 	}
 
-
 	protected function getCryptoMapList()
 	{
-		$options = get_option('crypto_tracker_settings');
-		$api_key = $options['crypto_tracker_api_key'];
-		$url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/map';
-		$parameters = [
-			'start' => '1',
-			'sort' => 'cmc_rank',
-			'limit' => '100',
-			// 'convert' => 'USD'
-		];
 
-		$headers = [
-			'Accepts: application/json',
-			'X-CMC_PRO_API_KEY: ' . $api_key
-		];
-		$qs = http_build_query($parameters); // query string encode the parameters
-		$request = "{$url}?{$qs}"; // create the request URL
+		$apiWrapper = new CoinMarketCapWrapper();
+		$ids = $apiWrapper->fetchIds();
 
-
-		$curl = curl_init(); // Get cURL resource
-		// Set cURL options
-		curl_setopt_array($curl, array(
-			CURLOPT_URL => $request,            // set the request URL
-			CURLOPT_HTTPHEADER => $headers,     // set the headers 
-			CURLOPT_RETURNTRANSFER => 1         // ask for raw response instead of bool
-		));
-		curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, false);
-		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-
-
-		$response = curl_exec($curl); // Send the request, save the response
-		// print_r(json_decode($response)); // print json decoded response
-		curl_close($curl); // Close request
-		$deresponse = json_decode($response);
-
-		$list = [];
-
-		foreach ($deresponse->data as $crypto) {
-			$list[$crypto->id] = $crypto->name;
-		}
-
-		return $list;
+		return $ids;
 	}
+
 
 	/**
 	 * Register Crypto Tracker widget controls.
@@ -135,15 +102,7 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 		);
 
 
-		// $cryptoList = $this->getCryptoMapList();
-		$cryptoList = [
-			'1' => 'BTC',
-			'1027' => 'ETH',
-
-		];
-
-
-
+		$options = $this->getCryptoMapList();
 
 		$repeater = new \Elementor\Repeater();
 
@@ -153,10 +112,10 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 				'label' => __('Chose crypto', 'crypto-tracker'),
 				'type' => \Elementor\Controls_Manager::SELECT,
 				'default' => '1',
-				'options' => $cryptoList
+				'options' => $options
 			]
 		);
-		$repeater->add_control(
+		$this->add_control(
 			'show_7d_change',
 			[
 				'label' => esc_html__('Show 7D change', 'crypto-tracker'),
@@ -184,50 +143,25 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 
 	protected function getCurrentPrices($crypto_list_ids)
 	{
-		$options = get_option('crypto_tracker_settings');
-		$api_key = $options['crypto_tracker_api_key'];
-		$url = 'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest';
-		$parameters = [
-			'id' => $crypto_list_ids
-		];
-
-		$headers = [
-			'Accepts: application/json',
-			'X-CMC_PRO_API_KEY: ' . $api_key
-		];
-		$qs = http_build_query($parameters); // query string encode the parameters
-		$request = "{$url}?{$qs}"; // create the request URL
-
-
-		$curl = curl_init(); // Get cURL resource
-		// Set cURL options
-		curl_setopt_array($curl, array(
-			CURLOPT_URL => $request,            // set the request URL
-			CURLOPT_HTTPHEADER => $headers,     // set the headers 
-			CURLOPT_RETURNTRANSFER => 1         // ask for raw response instead of bool
-		));
-		curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, false);
-		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-
-		$response = curl_exec($curl); // Send the request, save the response
-		// print_r(json_decode($response)); // print json decoded response
-		curl_close($curl); // Close request
-		$deresponse = json_decode($response);
-
-
+		// $crypto_list_ids = implode(',', $crypto_list_ids);
+		$apiWrapper = new CoinMarketCapWrapper();
+		$response = $apiWrapper->fetchLatesQuotes($crypto_list_ids);
 
 		$list = [];
 
-		foreach ($deresponse->data as $crypto) {
-			$currency = $crypto->quote->USD;
 
-			$id = $crypto->id;
-			$name = $crypto->name;
-			$symbol = $crypto->symbol;
-			$price = $currency->price;
+		// var_dump($response);
+		// die();
+		foreach ($response['data'] as $crypto) {
+			$currency = $crypto['quote']['USD'];
+
+			$id = $crypto['id'];
+			$name = $crypto['name'];
+			$symbol = $crypto['symbol'];
+			$price = $currency['price'];
 			$price = number_format_i18n($price, 2);
-			$change24h = $currency->percent_change_24h;
-			$change7d = $currency->percent_change_7d;
+			$change24h = $currency['percent_change_24h'];
+			$change7d = $currency['percent_change_7d'];
 
 
 			$list[$id] = [
@@ -248,7 +182,6 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 
 	protected function getCryptoIds($crypto_list)
 	{
-
 		$crypto_list_ids = [];
 		foreach ($crypto_list as $crypto) {
 			$crypto_list_ids[] = $crypto['crypto_id'];
@@ -272,24 +205,36 @@ class Crypto_Tracker_Widget extends \Elementor\Widget_Base
 	{
 
 		$settings = $this->get_settings_for_display();
-		$crypto_list = $settings['crypto_list'];
-		$crypto_list_ids = $this->getCryptoIds($crypto_list);
-		$currentPrices = $this->getCurrentPrices($crypto_list_ids);
+		$tracked_crypto = $settings['crypto_list'];
+		$ids = $this->getCryptoIds($tracked_crypto);
+		// $newRepeterList = [];
+		// foreach ($tracked_crypto as $crypto) {
+		// 	$newRepeterList[$crypto['crypto_id']] =
+		// 		[
+		// 			// 'show_7d_change' => $crypto['show_7d_change']
+		// 		];
+		// }
+		// $currentPrices = $this->getCurrentPrices(array_keys($newRepeterList));
+		$currentPrices = $this->getCurrentPrices($ids);
 
 
 ?>
 		<div class="container">
 			<div class="row">
 
-				<?php foreach ($currentPrices as $currentPrice) : ?>
+				<?php foreach ($currentPrices as $key => $currentPrice) : ?>
 					<div class="col-md-4 col-sm-6">
 						<div class="crypto-card">
 							<div class="crypto-name"><?php echo $currentPrice['name'] ?> (<?php echo $currentPrice['symbol'] ?>)</div>
 							<div class="crypto-price">$<?php echo $currentPrice['price'] ?></div>
 							<div class="crypto-change">
+								<!-- <span style="color:white">24h </span> -->
 								<span class="<?php echo $currentPrice['change24h'] > 0 ? 'increase' : 'decrease' ?>"><?php echo $currentPrice['change24h'] ?>%</span>
 								<br>
-								<span class="<?php echo $currentPrice['change7d'] > 0 ? 'increase' : 'decrease' ?>"><?php echo $currentPrice['change7d'] ?>%</span>
+								<?php if ($settings['show_7d_change'] == 'yes') :  ?>
+									<!-- <span style="color:white">7d </span> -->
+									<span class="<?php echo $currentPrice['change7d'] > 0 ? 'increase' : 'decrease' ?>"><?php echo $currentPrice['change7d'] ?>%</span>
+								<?php endif ?>
 							</div>
 						</div>
 					</div>
